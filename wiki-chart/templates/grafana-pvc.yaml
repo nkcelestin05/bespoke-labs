@@ -1,0 +1,80 @@
+# ============================================================================
+# Grafana PersistentVolumeClaim (PVC)
+# ============================================================================
+# This PVC requests persistent storage for Grafana data.
+#
+# Why Grafana Needs Persistent Storage:
+# - Dashboards: User-created dashboards and configurations
+# - Datasources: Datasource settings (if not provisioned via ConfigMap)
+# - Users: User accounts and permissions
+# - Plugins: Installed Grafana plugins
+# - Annotations: Manual annotations and events
+# - Preferences: UI settings and preferences
+# - Sessions: Active user sessions
+#
+# Without Persistence:
+# - All dashboards lost on pod restart (users have to recreate)
+# - Custom settings reset to defaults
+# - Plugins must be reinstalled
+# - Poor user experience
+#
+# With Persistence:
+# - Dashboards survive upgrades and restarts
+# - Configuration preserved across deployments
+# - Professional, production-ready setup
+#
+# Storage Requirements:
+# - Base Grafana: ~100MB
+# - SQLite database: ~10MB (stores dashboards, users, etc.)
+# - Plugins: ~50-200MB (depending on plugins installed)
+# - Logs: ~50MB
+# - Total: ~500MB typical usage
+# - Allocated: 1Gi (2x buffer for growth)
+#
+# Note: Grafana uses a SQLite database by default to store its data.
+# For high availability, consider using an external database (PostgreSQL, MySQL).
+# ============================================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-grafana-pvc
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: visualization
+spec:
+  # accessModes: How the volume can be mounted
+  accessModes:
+    # ReadWriteOnce (RWO): Volume can be mounted as read-write by a single node
+    # This is appropriate for Grafana because:
+    # - Grafana's embedded SQLite database doesn't support concurrent writes
+    # - Single replica is sufficient for development/small deployments
+    # - For HA, use external database (PostgreSQL) and ReadWriteMany if available
+    - ReadWriteOnce
+  
+  # storageClassName: Which storage provisioner to use
+  # "standard" is the default in most Kubernetes clusters:
+  # - Minikube: hostpath provisioner (local disk)
+  # - Cloud providers: persistent disks (EBS, GCE PD, Azure Disk)
+  # - Can be overridden in values.yaml for specific storage classes
+  storageClassName: {{ .Values.grafana.persistence.storageClass }}
+  
+  # resources: Storage capacity request
+  resources:
+    requests:
+      # Storage size: Default 1Gi from values.yaml
+      # Breakdown:
+      # - Grafana binary + dependencies: ~100MB
+      # - SQLite database (dashboards, users): ~10MB
+      # - Plugins (if installed): ~50-200MB
+      # - Logs and temporary files: ~50MB
+      # - Buffer for growth: ~500MB
+      # Total: 1Gi is sufficient for typical usage
+      storage: {{ .Values.grafana.persistence.size }}
+  
+  # Notes:
+  # - Volume is dynamically provisioned when PVC is created
+  # - Data persists even if pod is deleted (depends on reclaim policy)
+  # - For production: Consider backup strategies for dashboard data
+  # - Dashboard JSON can also be version-controlled in Git
+  # - For HA: Use external database and multiple Grafana replicas

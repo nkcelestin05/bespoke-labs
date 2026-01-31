@@ -1,0 +1,95 @@
+# ============================================================================
+# Grafana Service
+# ============================================================================
+# This Service provides stable internal networking for Grafana.
+#
+# Why We Need This Service:
+# - Pods have dynamic IPs that change on restart
+# - Service provides a stable DNS name: <service-name>.<namespace>.svc.cluster.local
+# - Load balances traffic (though we only have 1 replica)
+# - Enables access from within the cluster
+# - Used by Ingress (Phase 9) to route external traffic
+#
+# Service Type: ClusterIP
+# - Internal only (not exposed outside the cluster)
+# - Users access via port-forward (kubectl port-forward) or Ingress
+# - External access via Ingress in Phase 9
+# - More secure than exposing directly
+#
+# DNS Resolution:
+# - Full: wiki-chart-grafana.default.svc.cluster.local:3000
+# - Short (same namespace): wiki-chart-grafana:3000
+# - Ingress will use this service to route /grafana path
+#
+# Access Patterns:
+# 1. Development: kubectl port-forward svc/wiki-chart-grafana 3000:3000
+#    Then open: http://localhost:3000
+#
+# 2. Production: Ingress routes requests to this service
+#    Example: https://example.com/grafana → grafana-service:3000
+#
+# 3. Internal: Other pods can query Grafana API
+#    Example: Automation scripts, CI/CD pipelines
+# ============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-grafana
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: visualization
+spec:
+  # Service type: ClusterIP
+  # ClusterIP: Internal service with cluster-internal IP
+  # - Accessible only within the cluster
+  # - Users access via port-forward or Ingress (Phase 9)
+  # - External access controlled via Ingress rules
+  #
+  # Other types for reference:
+  # - NodePort: Exposes on each node's IP at a static port (30000-32767)
+  # - LoadBalancer: Provisions external load balancer (cloud providers)
+  type: {{ .Values.grafana.service.type }}
+  
+  # Port configuration
+  ports:
+    # Port: Service port (what clients connect to)
+    - port: {{ .Values.grafana.service.port }}
+      # TargetPort: Container port (where Grafana listens)
+      targetPort: {{ .Values.grafana.service.targetPort }}
+      # Protocol: TCP for HTTP traffic
+      protocol: TCP
+      # Name: Descriptive name for the port
+      # Used in Ingress and service discovery
+      name: {{ .Values.grafana.service.name }}
+  
+  # Selector: Routes traffic to pods with matching labels
+  # Must match labels in grafana-deployment.yaml pod template
+  selector:
+    {{- include "wiki-chart.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: visualization
+  
+  # sessionAffinity: Ensure requests from same client go to same pod
+  # ClientIP: Route same client to same pod (important for Grafana sessions)
+  # - Grafana uses sessions for user authentication
+  # - Same user should always hit same pod for session consistency
+  # - Especially important when using multiple replicas
+  # - Sessions stored in Grafana database, but this reduces lookup overhead
+  #
+  # Note: With single replica, this doesn't matter much
+  # But it's good practice for future scaling
+  sessionAffinity: ClientIP
+  
+  # sessionAffinityConfig: Configuration for session affinity
+  # timeoutSeconds: How long to maintain affinity (seconds)
+  # 10800 seconds = 3 hours (typical Grafana session length)
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  
+  # Notes:
+  # - Service automatically creates endpoints for matching pods
+  # - Service provides load balancing (round-robin by default)
+  # - DNS name: <service-name>.<namespace>.svc.cluster.local
+  # - Health checks: Only routes to healthy pods (readinessProbe)
+  # - For external access, use Ingress (Phase 9) instead of NodePort/LoadBalancer

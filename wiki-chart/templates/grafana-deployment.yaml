@@ -1,0 +1,279 @@
+# ============================================================================
+# Grafana Deployment
+# ============================================================================
+# This Deployment manages the Grafana visualization server pod.
+#
+# What is Grafana?
+# - Open-source visualization and analytics platform
+# - Creates interactive dashboards from metrics data
+# - Queries datasources (Prometheus, databases, etc.)
+# - Provides alerting, annotations, and team collaboration
+#
+# Key Features:
+# - Single replica (sufficient for development/small deployments)
+# - Persistent storage for dashboards and configuration
+# - Auto-provisioned Prometheus datasource via ConfigMap
+# - Admin credentials from values.yaml (should use Secrets in production)
+# - Health probes for automatic recovery
+# - Resource limits to prevent resource exhaustion
+#
+# Architecture:
+# - Grafana queries Prometheus API for metrics data
+# - Stores dashboards in SQLite database (on PVC)
+# - Provides web UI at :3000 for dashboard creation/viewing
+# - Users create dashboards using PromQL queries
+#
+# Data Flow:
+# 1. User opens Grafana UI in browser
+# 2. User creates dashboard with Prometheus queries
+# 3. Grafana queries Prometheus: http://prometheus-service:9090/api/v1/query
+# 4. Prometheus returns metrics data
+# 5. Grafana renders beautiful graphs and charts
+# 6. Dashboard saved to SQLite on PVC
+# ============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-grafana
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: visualization
+spec:
+  # Replica configuration
+  # Single replica because:
+  # - Grafana with SQLite backend doesn't support multi-writer clustering
+  # - Sufficient for development and small deployments
+  # - For HA in production, use external database (PostgreSQL) and multiple replicas
+  replicas: 1
+  
+  # Selector: Must match template labels
+  selector:
+    matchLabels:
+      {{- include "wiki-chart.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: visualization
+  
+  # Pod template
+  template:
+    metadata:
+      labels:
+        {{- include "wiki-chart.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: visualization
+      annotations:
+        # Annotation to trigger pod restart when ConfigMap changes
+        # This ensures Grafana reloads datasource configuration on updates
+        checksum/datasources: {{ include (print $.Template.BasePath "/grafana-configmap-datasources.yaml") . | sha256sum }}
+    spec:
+      # Security context for the pod
+      # Runs as non-root user for security (Grafana default UID: 472)
+      securityContext:
+        fsGroup: 472  # Grafana group ID
+        runAsUser: 472  # Grafana user ID
+        runAsNonRoot: true
+      
+      # Container configuration
+      containers:
+      - name: grafana
+        # Docker image from values.yaml
+        # Default: grafana/grafana:10.2.3 (stable release)
+        image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
+        imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
+        
+        # Port configuration
+        ports:
+        - name: grafana
+          # Grafana web UI and API port
+          containerPort: 3000
+          protocol: TCP
+        
+        # Environment variables for Grafana configuration
+        # These override grafana.ini defaults
+        env:
+        # ======================================================================
+        # Admin Credentials
+        # ======================================================================
+        # GF_SECURITY_ADMIN_USER: Default admin username
+        # Used for first login to Grafana UI
+        # SECURITY WARNING: Change in production! Use Kubernetes Secret instead
+        - name: GF_SECURITY_ADMIN_USER
+          value: {{ .Values.grafana.adminUser | quote }}
+        
+        # GF_SECURITY_ADMIN_PASSWORD: Default admin password
+        # Used for first login to Grafana UI
+        # CRITICAL: Change in production! Use Kubernetes Secret instead
+        # Best practice: Store in Secret and mount as environment variable
+        # Example:
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: grafana-secret
+        #       key: admin-password
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: {{ .Values.grafana.adminPassword | quote }}
+        
+        # ======================================================================
+        # Datasource Provisioning
+        # ======================================================================
+        # GF_PATHS_PROVISIONING: Path to provisioning configuration files
+        # Grafana automatically loads datasources, dashboards, etc. from here
+        # Our datasources ConfigMap is mounted at /etc/grafana/provisioning/datasources/
+        - name: GF_PATHS_PROVISIONING
+          value: "/etc/grafana/provisioning"
+        
+        # ======================================================================
+        # Server Configuration
+        # ======================================================================
+        # GF_SERVER_ROOT_URL: Full URL of Grafana server
+        # Used for:
+        # - Generating links in emails and alerts
+        # - OAuth redirects
+        # - Embedding dashboards
+        # For development: http://localhost:3000
+        # For production: Set to actual domain (e.g., https://grafana.example.com)
+        - name: GF_SERVER_ROOT_URL
+          value: "%(protocol)s://%(domain)s:%(http_port)s/"
+        
+        # GF_SERVER_SERVE_FROM_SUB_PATH: Enable serving from sub-path
+        # If true, Grafana can be served from /grafana instead of /
+        # Useful when using Ingress with path-based routing
+        # Example: https://example.com/grafana
+        - name: GF_SERVER_SERVE_FROM_SUB_PATH
+          value: "false"
+        
+        # ======================================================================
+        # Database Configuration
+        # ======================================================================
+        # GF_DATABASE_TYPE: Database backend for Grafana
+        # Options: sqlite3, mysql, postgres
+        # Default: sqlite3 (file-based, simple, no external DB needed)
+        # For HA: Use PostgreSQL or MySQL
+        - name: GF_DATABASE_TYPE
+          value: "sqlite3"
+        
+        # GF_DATABASE_PATH: Path to SQLite database file
+        # Stored on PVC for persistence
+        - name: GF_DATABASE_PATH
+          value: "/var/lib/grafana/grafana.db"
+        
+        # ======================================================================
+        # Analytics and Telemetry
+        # ======================================================================
+        # GF_ANALYTICS_REPORTING_ENABLED: Send anonymous usage stats to Grafana Labs
+        # Disable for privacy or air-gapped environments
+        - name: GF_ANALYTICS_REPORTING_ENABLED
+          value: "false"
+        
+        # GF_ANALYTICS_CHECK_FOR_UPDATES: Check for Grafana updates
+        # Disable for air-gapped environments
+        - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+          value: "false"
+        
+        # ======================================================================
+        # Logging Configuration
+        # ======================================================================
+        # GF_LOG_MODE: Logging output mode
+        # Options: console, file, syslog
+        # console: Logs to stdout (best for Kubernetes)
+        - name: GF_LOG_MODE
+          value: "console"
+        
+        # GF_LOG_LEVEL: Logging verbosity
+        # Options: trace, debug, info, warn, error, critical
+        # info: Standard verbosity (warnings and errors)
+        - name: GF_LOG_LEVEL
+          value: "info"
+        
+        # Liveness probe: Is the container running?
+        # If this fails, Kubernetes restarts the container
+        livenessProbe:
+          httpGet:
+            # /api/health: Grafana health endpoint
+            # Returns 200 OK if Grafana is running
+            # Checks: Web server responding, database accessible
+            path: /api/health
+            port: grafana
+          # Wait 30s after container starts before first check
+          # Grafana needs time to initialize database and plugins
+          initialDelaySeconds: 30
+          # Check every 10 seconds
+          periodSeconds: 10
+          # Request must complete within 5 seconds
+          timeoutSeconds: 5
+          # Restart after 3 consecutive failures
+          failureThreshold: 3
+        
+        # Readiness probe: Is the container ready to serve traffic?
+        # If this fails, Kubernetes removes pod from Service endpoints
+        readinessProbe:
+          httpGet:
+            # /api/health: Grafana readiness endpoint
+            # Returns 200 OK if Grafana is ready to serve requests
+            # Checks: Database migrations complete, plugins loaded
+            path: /api/health
+            port: grafana
+          # Wait 10s after container starts
+          initialDelaySeconds: 10
+          # Check every 5 seconds
+          periodSeconds: 5
+          # Request must complete within 3 seconds
+          timeoutSeconds: 3
+          # Mark not ready after 3 consecutive failures
+          failureThreshold: 3
+        
+        # Resource limits and requests
+        resources:
+          # Requests: Guaranteed resources (scheduling requirement)
+          requests:
+            # 100m = 0.1 CPU cores (minimum)
+            cpu: {{ .Values.grafana.resources.requests.cpu }}
+            # 128Mi = 128 megabytes RAM (minimum)
+            memory: {{ .Values.grafana.resources.requests.memory }}
+          # Limits: Maximum resources (hard cap)
+          limits:
+            # 500m = 0.5 CPU cores (max during dashboard rendering)
+            cpu: {{ .Values.grafana.resources.limits.cpu }}
+            # 512Mi = 512 megabytes RAM (max for query processing)
+            memory: {{ .Values.grafana.resources.limits.memory }}
+        
+        # Volume mounts: Connect storage to container filesystem
+        volumeMounts:
+        # Mount 1: Persistent storage for Grafana data
+        - name: storage
+          # /var/lib/grafana: Default Grafana data directory
+          # Contains:
+          # - grafana.db: SQLite database (dashboards, users, settings)
+          # - plugins: Installed Grafana plugins
+          # - png: Generated dashboard images
+          # - sessions: User session data
+          mountPath: /var/lib/grafana
+          # Read-write: Grafana writes dashboards and config here
+        
+        # Mount 2: Datasource configuration from ConfigMap
+        - name: datasources
+          # /etc/grafana/provisioning/datasources: Datasource provisioning directory
+          # Grafana automatically loads *.yaml files from here on startup
+          # Our datasources.yaml configures Prometheus as default datasource
+          mountPath: /etc/grafana/provisioning/datasources
+          # Read-only: Provisioning config shouldn't be modified at runtime
+          readOnly: true
+      
+      # Volumes: Define storage sources
+      volumes:
+      # Volume 1: Persistent volume for Grafana data
+      - name: storage
+        persistentVolumeClaim:
+          # PVC name from grafana-pvc.yaml
+          claimName: {{ include "wiki-chart.fullname" . }}-grafana-pvc
+      
+      # Volume 2: ConfigMap containing datasource configuration
+      - name: datasources
+        configMap:
+          # ConfigMap name from grafana-configmap-datasources.yaml
+          name: {{ include "wiki-chart.fullname" . }}-grafana-datasources
+          # defaultMode: File permissions (0644 = readable by all)
+          defaultMode: 420
+      
+      # Notes:
+      # - For production, use Kubernetes Secrets for admin credentials
+      # - For HA, use external database (PostgreSQL) and multiple replicas
+      # - Consider using Grafana's built-in LDAP/OAuth authentication
+      # - Enable HTTPS via Ingress with TLS certificates

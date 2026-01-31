@@ -1,0 +1,132 @@
+# ============================================================================
+# Grafana Datasources ConfigMap
+# ============================================================================
+# This ConfigMap configures Grafana's datasources (where it gets data from).
+#
+# What is a Datasource?
+# - A datasource is an external data source that Grafana queries
+# - Examples: Prometheus, MySQL, Elasticsearch, InfluxDB, etc.
+# - Each datasource has a type, URL, and access configuration
+# - Grafana queries datasources to populate dashboards
+#
+# Datasource Provisioning:
+# - Manual: Admin manually adds datasource via Grafana UI
+# - Automatic: ConfigMap automatically configures datasource on startup
+# - Benefit: Infrastructure as Code - datasource config in Git
+# - Grafana reads /etc/grafana/provisioning/datasources/*.yaml
+#
+# Our Configuration:
+# - Type: Prometheus (time-series database)
+# - URL: http://prometheus-service:9090 (internal Kubernetes DNS)
+# - Access: Proxy (Grafana server makes requests, not browser)
+# - Default: true (used by default in dashboards)
+# ============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-grafana-datasources
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: visualization
+data:
+  # datasources.yaml: Grafana datasource configuration file
+  # This file is mounted at /etc/grafana/provisioning/datasources/
+  # Grafana automatically loads all YAML files from this directory
+  datasources.yaml: |
+    # API version for datasource provisioning
+    # Version 1 is the current stable API
+    apiVersion: 1
+    
+    # datasources: List of datasources to configure
+    # We're configuring one datasource: Prometheus
+    datasources:
+      {{- range .Values.grafana.datasources }}
+      # ========================================================================
+      # Prometheus Datasource Configuration
+      # ========================================================================
+      # This configures Grafana to query Prometheus for metrics
+      
+      # name: Display name in Grafana UI
+      # Users will see this name when selecting a datasource
+      - name: {{ .name }}
+        
+        # type: Datasource plugin type
+        # "prometheus" uses the built-in Prometheus plugin
+        # Other types: mysql, postgres, elasticsearch, influxdb, etc.
+        type: {{ .type }}
+        
+        # access: How Grafana accesses the datasource
+        # - "proxy": Grafana server makes requests (hides datasource from browser)
+        # - "direct": Browser makes requests directly to datasource
+        # 
+        # Why proxy?
+        # - Security: Datasource credentials stay on server
+        # - Network: Browser doesn't need access to Prometheus
+        # - CORS: Avoids cross-origin issues
+        # - Best practice for internal datasources
+        access: {{ .access }}
+        
+        # url: Datasource endpoint URL
+        # Format: http://<service-name>:<port>
+        # Uses Kubernetes internal DNS: <service>.<namespace>.svc.cluster.local
+        # Short form works within same namespace: http://<service>:<port>
+        # 
+        # Our URL: {{ .url }}
+        # - Service: {{ include "wiki-chart.fullname" $ }}-prometheus
+        # - Port: {{ $.Values.prometheus.service.port }}
+        # - Grafana connects to Prometheus API to query metrics
+        url: {{ .url }}
+        
+        # isDefault: Whether this is the default datasource
+        # If true, dashboards use this datasource by default
+        # Only one datasource should be default
+        isDefault: {{ .isDefault }}
+        
+        # editable: Can users edit this datasource in UI?
+        # false: Datasource is read-only (managed via ConfigMap)
+        # true: Users can modify settings via Grafana UI
+        # 
+        # Best practice: false for provisioned datasources
+        # Changes should be made in values.yaml and deployed via Helm
+        editable: false
+        
+        # jsonData: Additional datasource-specific settings
+        # These settings vary by datasource type
+        jsonData:
+          # timeInterval: Default step for Prometheus queries
+          # Prometheus aggregates data into time buckets
+          # "15s" matches our Prometheus scrape interval
+          # Ensures queries align with data granularity
+          timeInterval: "15s"
+          
+          # httpMethod: HTTP method for Prometheus queries
+          # - POST: Better for complex queries (no URL length limit)
+          # - GET: Cacheable, but has URL length limit
+          # POST is recommended for modern Prometheus
+          httpMethod: POST
+          
+          # queryTimeout: Maximum time for a query (seconds)
+          # Prevents slow queries from hanging indefinitely
+          # 60s is reasonable for most dashboards
+          queryTimeout: 60
+      {{- end }}
+    
+    # Notes:
+    # - Configuration is read-only after provisioning
+    # - To update: Modify values.yaml and redeploy Helm chart
+    # - Grafana automatically reloads on ConfigMap changes
+    # - Multiple datasources can be configured (add to values.yaml)
+    
+    # Example: Adding a second datasource
+    # datasources:
+    #   - name: Prometheus
+    #     type: prometheus
+    #     url: http://prometheus-service:9090
+    #   - name: PostgreSQL
+    #     type: postgres
+    #     url: postgres-service:5432
+    #     database: wikidb
+    #     user: grafana
+    #     secureJsonData:
+    #       password: grafana_password
