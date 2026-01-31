@@ -1,5 +1,9 @@
 import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncSession,
+    async_sessionmaker,
+)
 from sqlalchemy.orm import DeclarativeBase
 
 # PostgreSQL database URL from environment variables
@@ -11,7 +15,8 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "wikidb")
 
 DATABASE_URL = (
-    f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@"
+    f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 
 # Create async engine

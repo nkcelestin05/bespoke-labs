@@ -39,7 +39,9 @@ async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
     users_created_total.inc()
 
     return UserResponse(
-        id=new_user.id, name=new_user.name, created_time=new_user.created_time
+        id=new_user.id,
+        name=new_user.name,
+        created_time=new_user.created_time,
     )
 
 
@@ -97,7 +99,11 @@ async def get_user(id: int, db: AsyncSession = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    return UserResponse(id=user.id, name=user.name, created_time=user.created_time)
+    return UserResponse(
+        id=user.id,
+        name=user.name,
+        created_time=user.created_time,
+    )
 
 
 @app.get("/posts/{id}", response_model=PostResponse)
