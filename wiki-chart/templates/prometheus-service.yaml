@@ -1,0 +1,70 @@
+# ============================================================================
+# Prometheus Service
+# ============================================================================
+# This Service provides stable internal networking for Prometheus.
+#
+# Why We Need This Service:
+# - Pods have dynamic IPs that change on restart
+# - Service provides a stable DNS name: <service-name>.<namespace>.svc.cluster.local
+# - Load balances traffic (though we only have 1 replica)
+# - Enables other services (Grafana) to connect to Prometheus
+#
+# Service Type: ClusterIP
+# - Internal only (not exposed outside the cluster)
+# - Grafana (Phase 8) will connect via this service
+# - External access via Ingress in Phase 9
+# - More secure than exposing directly
+#
+# DNS Resolution:
+# - Full: wiki-chart-prometheus.default.svc.cluster.local:9090
+# - Short (same namespace): wiki-chart-prometheus:9090
+# - Grafana will use: http://wiki-chart-prometheus:9090
+# ============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-prometheus
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+spec:
+  # Service type: ClusterIP
+  # ClusterIP: Internal service with cluster-internal IP
+  # - Accessible only within the cluster
+  # - Grafana will use this to query Prometheus
+  # - External access via Ingress (Phase 9)
+  #
+  # Other types for reference:
+  # - NodePort: Exposes on each node's IP at a static port (30000-32767)
+  # - LoadBalancer: Provisions external load balancer (cloud providers)
+  type: {{ .Values.prometheus.service.type }}
+  
+  # Port configuration
+  ports:
+    # Port: Service port (what clients connect to)
+    - port: {{ .Values.prometheus.service.port }}
+      # TargetPort: Container port (where Prometheus listens)
+      targetPort: {{ .Values.prometheus.service.targetPort }}
+      # Protocol: TCP for HTTP traffic
+      protocol: TCP
+      # Name: Descriptive name for the port
+      # Used in Ingress and service discovery
+      name: {{ .Values.prometheus.service.name }}
+  
+  # Selector: Routes traffic to pods with matching labels
+  # Must match labels in prometheus-deployment.yaml pod template
+  selector:
+    {{- include "wiki-chart.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+  
+  # sessionAffinity: Ensure requests from same client go to same pod
+  # None: No affinity (default, suitable for stateless queries)
+  # ClientIP: Route same client to same pod (useful for some use cases)
+  sessionAffinity: None
+  
+  # Notes:
+  # - Service automatically creates endpoints for matching pods
+  # - Service provides load balancing (round-robin by default)
+  # - DNS name: <service-name>.<namespace>.svc.cluster.local
+  # - Health checks: Only routes to healthy pods (readinessProbe)

@@ -1,0 +1,180 @@
+# ============================================================================
+# Prometheus Deployment
+# ============================================================================
+# This Deployment manages the Prometheus server pod.
+#
+# Key Features:
+# - Single replica (Prometheus TSDB doesn't support multi-writer clustering)
+# - ConfigMap for configuration (prometheus.yml)
+# - PVC for persistent metric storage
+# - Health probes for automatic recovery
+# - Resource limits to prevent resource exhaustion
+#
+# Architecture:
+# - Prometheus scrapes metrics from targets (FastAPI)
+# - Stores data in TSDB (Time Series Database)
+# - Provides HTTP API for querying metrics (used by Grafana in Phase 8)
+# - Web UI available at :9090 for manual exploration
+# ============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-prometheus
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+spec:
+  # Replica configuration
+  # Single replica because:
+  # - Prometheus TSDB doesn't support multiple writers to same storage
+  # - For HA in production, use Prometheus federation or Thanos
+  # - Development/small deployments: single replica is sufficient
+  replicas: 1
+  
+  # Selector: Must match template labels
+  selector:
+    matchLabels:
+      {{- include "wiki-chart.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: monitoring
+  
+  # Pod template
+  template:
+    metadata:
+      labels:
+        {{- include "wiki-chart.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: monitoring
+      annotations:
+        # Annotation to trigger pod restart when ConfigMap changes
+        # This ensures Prometheus reloads configuration on updates
+        checksum/config: {{ include (print $.Template.BasePath "/prometheus-configmap.yaml") . | sha256sum }}
+    spec:
+      # Container configuration
+      containers:
+      - name: prometheus
+        # Docker image from values.yaml
+        # Default: prom/prometheus:v2.48.0 (stable release)
+        image: "{{ .Values.prometheus.image.repository }}:{{ .Values.prometheus.image.tag }}"
+        imagePullPolicy: {{ .Values.prometheus.image.pullPolicy }}
+        
+        # Command-line arguments for Prometheus server
+        args:
+          # --config.file: Path to configuration file
+          # Mounted from ConfigMap at /etc/prometheus/prometheus.yml
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          
+          # --storage.tsdb.path: Where to store time-series data
+          # Mounted from PVC at /prometheus (persistent storage)
+          - '--storage.tsdb.path=/prometheus'
+          
+          # --storage.tsdb.retention.time: How long to keep metrics
+          # 15d = 15 days (configurable via values.yaml in future)
+          # After 15 days, old data is automatically deleted to free space
+          - '--storage.tsdb.retention.time=15d'
+          
+          # --web.enable-lifecycle: Enable HTTP API for reloading config
+          # Allows: curl -X POST http://localhost:9090/-/reload
+          # Useful for updating configuration without pod restart
+          - '--web.enable-lifecycle'
+          
+          # --web.console.libraries: Path to console libraries
+          # Enables Prometheus web UI console templates
+          - '--web.console.libraries=/etc/prometheus/console_libraries'
+          
+          # --web.console.templates: Path to console templates
+          # Enables Prometheus web UI console pages
+          - '--web.console.templates=/etc/prometheus/consoles'
+        
+        # Port configuration
+        ports:
+        - name: web
+          # Prometheus web UI and API port
+          containerPort: 9090
+          protocol: TCP
+        
+        # Liveness probe: Is the container running?
+        # If this fails, Kubernetes restarts the container
+        livenessProbe:
+          httpGet:
+            # /-/healthy: Prometheus health endpoint
+            # Returns 200 OK if Prometheus is running
+            path: /-/healthy
+            port: web
+          # Wait 30s after container starts before first check
+          initialDelaySeconds: 30
+          # Check every 10 seconds
+          periodSeconds: 10
+          # Request must complete within 5 seconds
+          timeoutSeconds: 5
+          # Restart after 3 consecutive failures
+          failureThreshold: 3
+        
+        # Readiness probe: Is the container ready to serve traffic?
+        # If this fails, Kubernetes removes pod from Service endpoints
+        readinessProbe:
+          httpGet:
+            # /-/ready: Prometheus readiness endpoint
+            # Returns 200 OK if Prometheus is ready to serve queries
+            # Checks: config loaded, TSDB ready, targets scraped
+            path: /-/ready
+            port: web
+          # Wait 10s after container starts
+          initialDelaySeconds: 10
+          # Check every 5 seconds
+          periodSeconds: 5
+          # Request must complete within 3 seconds
+          timeoutSeconds: 3
+          # Mark not ready after 3 consecutive failures
+          failureThreshold: 3
+        
+        # Resource limits and requests
+        resources:
+          # Requests: Guaranteed resources (scheduling requirement)
+          requests:
+            # 100m = 0.1 CPU cores (minimum)
+            cpu: {{ .Values.prometheus.resources.requests.cpu }}
+            # 256Mi = 256 megabytes RAM (minimum)
+            memory: {{ .Values.prometheus.resources.requests.memory }}
+          # Limits: Maximum resources (hard cap)
+          limits:
+            # 500m = 0.5 CPU cores (max during scraping)
+            cpu: {{ .Values.prometheus.resources.limits.cpu }}
+            # 1Gi = 1 gigabyte RAM (max for metric processing)
+            memory: {{ .Values.prometheus.resources.limits.memory }}
+        
+        # Volume mounts: Connect storage to container filesystem
+        volumeMounts:
+        # Mount 1: Configuration file from ConfigMap
+        - name: config
+          # Mount path: Standard Prometheus config location
+          mountPath: /etc/prometheus
+          # Read-only: Config shouldn't be modified at runtime
+          readOnly: true
+        
+        # Mount 2: Persistent storage for metrics data
+        - name: storage
+          # Mount path: TSDB storage location (matches --storage.tsdb.path)
+          mountPath: /prometheus
+          # Read-write: Prometheus writes time-series data here
+      
+      # Volumes: Define storage sources
+      volumes:
+      # Volume 1: ConfigMap containing prometheus.yml
+      - name: config
+        configMap:
+          # ConfigMap name from prometheus-configmap.yaml
+          name: {{ include "wiki-chart.fullname" . }}-prometheus-config
+          # defaultMode: File permissions (0644 = readable by all)
+          defaultMode: 420
+      
+      # Volume 2: Persistent volume for metrics storage
+      - name: storage
+        persistentVolumeClaim:
+          # PVC name from prometheus-pvc.yaml
+          claimName: {{ include "wiki-chart.fullname" . }}-prometheus-pvc
+      
+      # Security context (optional, but recommended for production)
+      # securityContext:
+      #   fsGroup: 65534  # "nobody" user group
+      #   runAsNonRoot: true
+      #   runAsUser: 65534  # "nobody" user (Prometheus default)

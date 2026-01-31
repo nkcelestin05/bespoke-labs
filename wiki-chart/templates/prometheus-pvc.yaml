@@ -1,0 +1,62 @@
+# ============================================================================
+# Prometheus PersistentVolumeClaim (PVC)
+# ============================================================================
+# This PVC requests persistent storage for Prometheus time-series data.
+#
+# Why Prometheus Needs Persistent Storage:
+# - Prometheus is a time-series database (TSDB) that stores metrics over time
+# - Without persistence: All metrics lost when pod restarts (no historical data)
+# - With persistence: Metrics survive pod restarts/upgrades (trend analysis enabled)
+#
+# Storage Requirements:
+# - Default: 2Gi (configured in values.yaml)
+# - Retention: 15 days of metrics (configured in Deployment args)
+# - Growth rate: ~50MB per day (depends on metric cardinality)
+#
+# Data Stored:
+# - Time-series samples: (timestamp, metric_name, labels, value)
+# - Example: users_created_total{job="fastapi"} 42 @1706745600
+# - Compressed blocks: Data is compressed for efficiency
+# - WAL (Write-Ahead Log): Crash recovery data
+# ============================================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-prometheus-pvc
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+spec:
+  # accessModes: How the volume can be mounted
+  accessModes:
+    # ReadWriteOnce (RWO): Volume can be mounted as read-write by a single node
+    # This is appropriate for Prometheus because:
+    # - Prometheus TSDB doesn't support clustering (no shared writes)
+    # - Only one Prometheus pod writes to this volume
+    # - Single replica is sufficient for development/small deployments
+    - ReadWriteOnce
+  
+  # storageClassName: Which storage provisioner to use
+  # "standard" is the default in most Kubernetes clusters:
+  # - Minikube: hostpath provisioner (local disk)
+  # - Cloud providers: persistent disks (EBS, GCE PD, Azure Disk)
+  # - Can be overridden in values.yaml for specific storage classes
+  storageClassName: {{ .Values.prometheus.persistence.storageClass }}
+  
+  # resources: Storage capacity request
+  resources:
+    requests:
+      # Storage size: Default 2Gi from values.yaml
+      # Calculation for 15-day retention:
+      # - 50 metrics per scrape
+      # - 15 second interval = 4 scrapes/minute = 5760 scrapes/day
+      # - 50 metrics × 5760 scrapes = 288,000 data points/day
+      # - ~50MB per day (compressed)
+      # - 15 days × 50MB = 750MB (with 1.25GB buffer = 2GB total)
+      storage: {{ .Values.prometheus.persistence.size }}
+  
+  # Notes:
+  # - Volume is dynamically provisioned when PVC is created
+  # - Data persists even if PVC is deleted (depending on reclaim policy)
+  # - For production: Consider backup strategies for metric data

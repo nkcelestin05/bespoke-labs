@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from datetime import datetime, timezone
 from app.database import engine, get_db, Base
 from app.models import User, Post
 from app.schemas import UserCreate, UserResponse, PostCreate, PostResponse
@@ -141,8 +142,27 @@ async def root():
             "POST /posts": "Create a new post",
             "GET /user/{id}": "Get user by ID",
             "GET /posts/{id}": "Get post by ID",
+            "GET /health": "Health check endpoint",
             "GET /metrics": "Prometheus metrics"
         }
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Kubernetes probes.
+    
+    This endpoint is used by Kubernetes liveness and readiness probes
+    to determine if the application is running and ready to serve traffic.
+    
+    Returns:
+    - status: Health status of the application
+    - timestamp: Current timestamp in ISO format
+    """
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
