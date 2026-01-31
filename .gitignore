@@ -103,3 +103,7 @@ wiki-chart/charts/
 
 # UV lock files (uncomment if you want to ignore)
 # uv.lock
+
+
+# PDF files
+*.pdf
