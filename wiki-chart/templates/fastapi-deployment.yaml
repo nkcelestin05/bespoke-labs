@@ -1,0 +1,215 @@
+# FastAPI Deployment
+# ===================
+# This deployment manages the FastAPI application pods that serve the Wikipedia-like API.
+# Unlike PostgreSQL (which runs 1 replica), we can run multiple FastAPI replicas for:
+# - High availability: If one pod crashes, others continue serving traffic
+# - Load distribution: Multiple pods can handle more concurrent requests
+# - Zero-downtime deployments: Rolling updates replace pods gradually
+#
+# Key Components:
+# - Init container: Ensures PostgreSQL is ready before starting FastAPI
+# - Main container: Runs the FastAPI application with uvicorn
+# - Health probes: Kubernetes uses these to manage pod lifecycle
+# - Resource limits: Prevents pods from consuming excessive cluster resources
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Name of the deployment - will be something like "wiki-chart-fastapi"
+  name: {{ include "wiki-chart.fullname" . }}-fastapi
+  
+  # Labels for organization and querying
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: wiki-service
+
+spec:
+  # Number of pod replicas to run
+  # Value comes from values.yaml - typically 2 for redundancy
+  replicas: {{ .Values.fastapi.replicaCount }}
+  
+  # Selector defines which pods this deployment manages
+  # Must match the labels in the pod template below
+  selector:
+    matchLabels:
+      {{- include "wiki-chart.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  
+  # Rolling update strategy
+  # This ensures zero-downtime deployments
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Maximum number of pods that can be unavailable during update
+      maxUnavailable: 1
+      # Maximum number of extra pods that can be created during update
+      maxSurge: 1
+  
+  # Template defines the pod specification
+  template:
+    metadata:
+      labels:
+        {{- include "wiki-chart.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    
+    spec:
+      # Init Containers
+      # ===============
+      # Init containers run BEFORE the main application container starts.
+      # They must complete successfully before the main container runs.
+      # 
+      # Why do we need this?
+      # - FastAPI connects to PostgreSQL on startup
+      # - If PostgreSQL isn't ready, FastAPI will crash
+      # - This creates a dependency: PostgreSQL must start first
+      # - Init containers solve this by waiting until PostgreSQL is available
+      initContainers:
+      - name: wait-for-postgres
+        # We use busybox (tiny Linux image) with networking tools
+        image: busybox:1.36
+        
+        # This command checks if PostgreSQL is accepting connections
+        # How it works:
+        # 1. Loop until nc (netcat) successfully connects to PostgreSQL
+        # 2. nc -z does a "zero I/O" check (just tests the connection)
+        # 3. If connection fails, sleep 2 seconds and try again
+        # 4. When connection succeeds, exit (init container completes)
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for PostgreSQL to be ready..."
+          until nc -z {{ include "wiki-chart.fullname" . }}-postgresql 5432; do
+            echo "PostgreSQL is unavailable - sleeping"
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
+        
+        # This init container needs minimal resources
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"
+      
+      # Main Application Container
+      # ===========================
+      containers:
+      - name: fastapi
+        # Docker image from values.yaml
+        # In production, this should be a versioned image from a registry
+        image: "{{ .Values.fastapi.image.repository }}:{{ .Values.fastapi.image.tag }}"
+        imagePullPolicy: {{ .Values.fastapi.image.pullPolicy }}
+        
+        # Container port - FastAPI/uvicorn listens on port 8000
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        
+        # Environment Variables
+        # =====================
+        # These configure the FastAPI application's database connection.
+        # The app reads these from os.environ in database.py
+        env:
+        # Database host - uses the PostgreSQL service name
+        # Kubernetes DNS resolves this to the PostgreSQL pod IP
+        - name: DB_HOST
+          value: {{ include "wiki-chart.fullname" . }}-postgresql
+        
+        # Database port - PostgreSQL's default port
+        - name: DB_PORT
+          value: "{{ .Values.postgresql.service.port }}"
+        
+        # Database name - the database created by PostgreSQL
+        - name: DB_NAME
+          value: {{ .Values.postgresql.database.name }}
+        
+        # Database user - the PostgreSQL user for authentication
+        - name: DB_USER
+          value: {{ .Values.postgresql.database.user }}
+        
+        # Database password
+        # ⚠️ SECURITY NOTE: In production, use a Kubernetes Secret!
+        # Example:
+        # - name: DB_PASSWORD
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: postgres-secret
+        #       key: password
+        - name: DB_PASSWORD
+          value: {{ .Values.postgresql.database.password }}
+        
+        # Liveness Probe
+        # ==============
+        # Kubernetes uses this to determine if the container is still running.
+        # If this probe fails multiple times, Kubernetes will restart the container.
+        # 
+        # Difference from Readiness Probe:
+        # - Liveness = "Is the app alive?" (restart if not)
+        # - Readiness = "Is the app ready to serve traffic?" (remove from service if not)
+        livenessProbe:
+          httpGet:
+            # FastAPI health endpoint - should return 200 OK if healthy
+            path: {{ .Values.fastapi.livenessProbe.httpGet.path }}
+            port: {{ .Values.fastapi.livenessProbe.httpGet.port }}
+          # Wait 30 seconds before first check (app needs time to start)
+          initialDelaySeconds: {{ .Values.fastapi.livenessProbe.initialDelaySeconds }}
+          # Check every 10 seconds
+          periodSeconds: {{ .Values.fastapi.livenessProbe.periodSeconds }}
+          # Timeout after 5 seconds
+          timeoutSeconds: {{ .Values.fastapi.livenessProbe.timeoutSeconds }}
+          # Restart after 3 consecutive failures
+          failureThreshold: {{ .Values.fastapi.livenessProbe.failureThreshold }}
+        
+        # Readiness Probe
+        # ===============
+        # Kubernetes uses this to determine if the container is ready to accept traffic.
+        # If this probe fails, the pod is removed from the service endpoints.
+        # Traffic won't be sent to this pod until it passes the readiness check.
+        # 
+        # This is useful during:
+        # - Startup: Don't send traffic until app is fully initialized
+        # - Database issues: Remove from load balancer if DB connection fails
+        # - Deployments: Ensure new pods are healthy before removing old ones
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.fastapi.readinessProbe.httpGet.path }}
+            port: {{ .Values.fastapi.readinessProbe.httpGet.port }}
+          # Check sooner than liveness (might be ready quickly)
+          initialDelaySeconds: {{ .Values.fastapi.readinessProbe.initialDelaySeconds }}
+          # Check more frequently
+          periodSeconds: {{ .Values.fastapi.readinessProbe.periodSeconds }}
+          # Shorter timeout
+          timeoutSeconds: {{ .Values.fastapi.readinessProbe.timeoutSeconds }}
+          # Remove from service after 3 failures
+          failureThreshold: {{ .Values.fastapi.readinessProbe.failureThreshold }}
+        
+        # Resource Limits
+        # ===============
+        # Resources are critical for:
+        # 1. Cluster stability: Prevent pods from consuming all CPU/memory
+        # 2. Scheduling: Kubernetes needs to know resource needs for placement
+        # 3. Cost management: Right-size pods to avoid waste
+        # 
+        # Requests vs Limits:
+        # - Requests: Guaranteed resources (used for scheduling decisions)
+        # - Limits: Maximum resources (pod is throttled/killed if exceeded)
+        resources:
+          requests:
+            # Minimum guaranteed CPU
+            # 100m = 0.1 CPU cores (10% of one core)
+            cpu: {{ .Values.fastapi.resources.requests.cpu }}
+            # Minimum guaranteed memory
+            memory: {{ .Values.fastapi.resources.requests.memory }}
+          limits:
+            # Maximum CPU
+            # 500m = 0.5 CPU cores (50% of one core)
+            # If exceeded, pod is throttled (not killed)
+            cpu: {{ .Values.fastapi.resources.limits.cpu }}
+            # Maximum memory
+            # If exceeded, pod is killed (OOMKilled) and restarted
+            memory: {{ .Values.fastapi.resources.limits.memory }}

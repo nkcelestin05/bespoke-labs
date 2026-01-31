@@ -1,0 +1,106 @@
+# FastAPI Service
+# ================
+# This Service provides a stable network endpoint for accessing the FastAPI application.
+# It acts as an internal load balancer, distributing traffic across multiple FastAPI pods.
+#
+# Why do we need this?
+# - We run multiple FastAPI replicas (default: 2) for high availability
+# - Each pod has its own IP address that can change when pods restart
+# - The Service provides a single, stable DNS name and IP address
+# - Traffic is automatically load-balanced across healthy pods
+#
+# How other services connect:
+# - Ingress (external traffic) → FastAPI Service → FastAPI Pods
+# - Internal services can also use: http://wiki-chart-fastapi:8000
+
+apiVersion: v1
+kind: Service
+metadata:
+  # Name of the service - becomes the DNS name within the cluster
+  # Example: "wiki-chart-fastapi" can be used by other pods
+  name: {{ include "wiki-chart.fullname" . }}-fastapi
+  
+  # Labels for organization and querying
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: wiki-service
+
+spec:
+  # Service Type: ClusterIP
+  # =======================
+  # ClusterIP provides internal cluster networking only
+  # - Service gets a virtual IP address within the cluster
+  # - Accessible only from within the Kubernetes cluster
+  # - External access is provided via Ingress (configured in Phase 8)
+  # - More secure than directly exposing pods with NodePort/LoadBalancer
+  # 
+  # Why ClusterIP for FastAPI?
+  # - We'll use Ingress for external access (better for HTTP/HTTPS)
+  # - Keeps the API isolated from direct external access
+  # - Allows internal services to communicate efficiently
+  type: {{ .Values.fastapi.service.type }}
+  
+  # Ports Configuration
+  # ===================
+  # Services can expose multiple ports, but we only need one for HTTP
+  ports:
+  - port: {{ .Values.fastapi.service.port }}
+    # The port that the Service listens on (from values.yaml, typically 8000)
+    # Other pods/ingress will connect to this port
+    # Example: curl http://wiki-chart-fastapi:8000/health
+    
+    targetPort: {{ .Values.fastapi.service.targetPort }}
+    # The port on the FastAPI container where uvicorn is listening
+    # Traffic sent to 'port' is forwarded to 'targetPort' on the pods
+    # Must match the containerPort in the deployment (8000)
+    
+    protocol: TCP
+    # HTTP uses TCP protocol
+    
+    name: {{ .Values.fastapi.service.name }}
+    # Name for this port (useful when service has multiple ports)
+    # Ingress can reference this name instead of using port numbers
+  
+  # Selector
+  # ========
+  # This is the key that connects the Service to the Deployment!
+  # The service will route traffic to ANY pod with these labels.
+  # 
+  # How load balancing works:
+  # 1. Service watches for pods with matching labels
+  # 2. When a request arrives, service picks one healthy pod
+  # 3. Traffic is forwarded to that pod's targetPort
+  # 4. Kubernetes automatically removes unhealthy pods from rotation
+  # 5. Readiness probes determine which pods are "healthy"
+  selector:
+    {{- include "wiki-chart.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  
+  # Session Affinity (commented out, but useful to know)
+  # ==================
+  # By default, each request can go to any pod (random load balancing)
+  # Uncomment this to enable sticky sessions (same client → same pod)
+  # sessionAffinity: ClientIP
+  # sessionAffinityConfig:
+  #   clientIP:
+  #     timeoutSeconds: 10800  # 3 hours
+  
+  # Traffic Flow Example:
+  # =====================
+  # External Request → Ingress Controller → FastAPI Service (ClusterIP:8000)
+  #                                         ↓
+  #                    ┌───────────────────────────────────┐
+  #                    │  Service Load Balancer            │
+  #                    └───────────────────────────────────┘
+  #                              ↓           ↓
+  #                     FastAPI Pod 1   FastAPI Pod 2
+  #                     (10.1.2.3:8000) (10.1.2.4:8000)
+  #
+  # The Service automatically:
+  # - Discovers new pods when they're created
+  # - Removes pods that fail readiness checks
+  # - Distributes load across healthy pods
+  # - Provides DNS name resolution within the cluster
+
+---END:file=/home/ubuntu/assignment-part1/wiki-chart/templates/fastapi-service.yaml---
