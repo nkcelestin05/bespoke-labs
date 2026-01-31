@@ -1,0 +1,350 @@
+# ============================================================================
+# Ingress Resource - External Access Gateway
+# ============================================================================
+# This Ingress exposes our application stack to external users via HTTP/HTTPS.
+#
+# What is an Ingress?
+# - Kubernetes Ingress manages external access to services in a cluster
+# - Acts as a Layer 7 (HTTP/HTTPS) load balancer and reverse proxy
+# - Provides routing rules based on hostnames and URL paths
+# - Handles SSL/TLS termination for HTTPS
+# - Single entry point for multiple backend services
+#
+# Why We Need Ingress:
+# 1. Unified Access: Single URL for all services
+#    - Before: fastapi-service:8000, grafana-service:3000, prometheus-service:9090
+#    - After: wiki-api.local/ (FastAPI), wiki-api.local/grafana, wiki-api.local/prometheus
+#
+# 2. External Accessibility:
+#    - ClusterIP services are internal-only
+#    - Ingress exposes services to the outside world
+#    - No need for port-forward or NodePort
+#
+# 3. Path-Based Routing:
+#    - Route requests to different services based on URL path
+#    - Example: /grafana → Grafana, /prometheus → Prometheus, / → FastAPI
+#    - Clean URLs without exposing port numbers
+#
+# 4. SSL/TLS Termination:
+#    - Ingress handles HTTPS encryption
+#    - Backend services can use plain HTTP
+#    - Centralized certificate management
+#
+# 5. Production-Ready Features:
+#    - Load balancing across multiple pods
+#    - Rate limiting and authentication
+#    - Request routing and URL rewriting
+#    - Monitoring and access logs
+#
+# Ingress Controller Required:
+# - Ingress resource alone doesn't do anything
+# - Need an Ingress Controller to implement the rules
+# - Popular controllers: nginx, traefik, HAProxy, AWS ALB, GCP Load Balancer
+# - We use nginx (most common, feature-rich, well-documented)
+#
+# How Ingress Works:
+#
+#   External Request → Ingress Controller → Ingress Rules → Service → Pod
+#
+# 1. User makes request: http://wiki-api.local/grafana
+# 2. DNS resolves to Ingress Controller (LoadBalancer or NodePort)
+# 3. Ingress Controller reads Ingress resource rules
+# 4. Controller matches /grafana path, routes to grafana-service:3000
+# 5. Service load-balances to healthy Grafana pod
+# 6. Response flows back through same path
+#
+# Routing Strategy:
+# - Path-based routing on single host (wiki-api.local)
+# - Each service gets its own URL path:
+#   * /          → fastapi-service:8000 (main API)
+#   * /grafana   → grafana-service:3000 (visualization)
+#   * /prometheus → prometheus-service:9090 (metrics)
+#
+# Alternative Strategy (Host-based):
+# - Could use different hostnames for each service:
+#   * api.example.com → FastAPI
+#   * grafana.example.com → Grafana
+#   * prometheus.example.com → Prometheus
+# - Path-based is simpler for development (single DNS entry)
+# - Host-based is cleaner for production (no path prefix to manage)
+#
+# Path Rewriting:
+# - Problem: /grafana/dashboard → Grafana expects /dashboard
+# - Solution: nginx.ingress.kubernetes.io/rewrite-target annotation
+# - Strips path prefix before forwarding to backend
+# - Example: /grafana/api/datasources → /api/datasources (sent to Grafana)
+#
+# Development vs Production:
+# - Development: wiki-api.local (add to /etc/hosts)
+# - Production: Real domain with DNS (example.com)
+# - Production: Enable TLS with real certificates (Let's Encrypt)
+# ============================================================================
+
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wiki-chart.fullname" . }}-ingress
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+  
+  # Annotations: Special instructions for the Ingress Controller
+  # These are controller-specific (nginx ingress controller in our case)
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    
+    # Path Rewriting for Grafana and Prometheus
+    # Problem: /grafana/dashboard → Grafana expects /dashboard
+    # Solution: Strip /grafana and /prometheus prefixes
+    # 
+    # How it works:
+    # 1. Request: http://wiki-api.local/grafana/dashboard
+    # 2. Ingress captures: /grafana(/|$)(.*)
+    # 3. Extracts: $2 = /dashboard
+    # 4. Forwards: http://grafana-service:3000/dashboard
+    #
+    # Regex Explanation:
+    # - /grafana - Match /grafana prefix
+    # - (/|$) - Match slash or end of string
+    # - (.*) - Capture everything after (stored in $2)
+    # - This becomes $2 in rewrite-target
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    
+    # Configuration Snippet: Additional nginx config for path handling
+    # These rules apply to all paths in this Ingress
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      # Preserve original host header (important for Grafana)
+      proxy_set_header Host $host;
+      
+      # Pass real client IP (for logging and rate limiting)
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      
+      # Increase timeouts for long-running queries
+      proxy_read_timeout 300s;
+      proxy_connect_timeout 75s;
+    
+    # Additional annotations for production (uncomment as needed):
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"  # Force HTTPS
+    # nginx.ingress.kubernetes.io/rate-limit: "100"  # 100 requests/second
+    # nginx.ingress.kubernetes.io/auth-type: basic  # Basic authentication
+    # nginx.ingress.kubernetes.io/auth-secret: basic-auth  # Auth credentials
+    # cert-manager.io/cluster-issuer: letsencrypt-prod  # Auto TLS certs
+
+spec:
+  # ingressClassName: Specifies which Ingress Controller handles this resource
+  # - Multiple controllers can coexist in a cluster
+  # - className: nginx → Use nginx ingress controller
+  # - Other options: traefik, haproxy, etc.
+  # - Controller must be installed in cluster (kubectl get ingressclass)
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  
+  # TLS Configuration: HTTPS/SSL Support
+  # - Terminates TLS at ingress level
+  # - Backend services use plain HTTP
+  # - Certificates stored in Kubernetes Secrets
+  # 
+  # Production Setup:
+  # 1. Create certificate (Let's Encrypt, cert-manager)
+  # 2. Store in Secret: kubectl create secret tls wiki-api-tls --cert=cert.pem --key=key.pem
+  # 3. Reference secret below
+  # 4. Enable ssl-redirect annotation above
+  #
+  # Development: TLS disabled for simplicity
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  
+  # Routing Rules: Define how requests are routed to backend services
+  rules:
+    {{- range .Values.ingress.hosts }}
+    # Host: Domain name for this application
+    # - Development: wiki-api.local (add to /etc/hosts: 127.0.0.1 wiki-api.local)
+    # - Minikube: Run 'minikube ip', use that IP in /etc/hosts
+    # - Production: Real domain with DNS record pointing to LoadBalancer IP
+    #
+    # Example /etc/hosts entry:
+    # 192.168.49.2 wiki-api.local  # Minikube IP
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          # Path: URL path pattern to match
+          # pathType options:
+          # - Prefix: Matches path prefix (most flexible)
+          #   Example: /grafana matches /grafana, /grafana/, /grafana/dashboard
+          # - Exact: Matches exact path only
+          #   Example: /grafana matches only /grafana
+          # - ImplementationSpecific: Controller-specific behavior
+          #
+          # Our paths:
+          # 1. /grafana(/|$)(.*) → Grafana UI
+          # 2. /prometheus(/|$)(.*) → Prometheus UI
+          # 3. /api(/|$)(.*) → FastAPI (alternative, if you want /api prefix)
+          # 4. / → FastAPI (default, catches all other requests)
+          #
+          # Path Priority:
+          # - Longest/most specific paths matched first
+          # - / is catch-all, must be last
+          # - Ingress controller handles priority automatically
+          - path: {{ .path }}{{ if eq .path "/grafana" }}(/|$)(.*){{ else if eq .path "/prometheus" }}(/|$)(.*){{ else }}{{ end }}
+            pathType: {{ .pathType }}
+            backend:
+              # Service: Backend Kubernetes service to route to
+              # - Must be in same namespace as Ingress
+              # - Can specify service name and port
+              # - Traffic flows: Ingress → Service → Pod
+              service:
+                # Service name from templates (includes release name)
+                # - grafana-service → wiki-chart-grafana
+                # - prometheus-service → wiki-chart-prometheus
+                # - fastapi-service → wiki-chart-fastapi
+                {{- if eq .service.name "grafana-service" }}
+                name: {{ include "wiki-chart.fullname" $ }}-grafana
+                {{- else if eq .service.name "prometheus-service" }}
+                name: {{ include "wiki-chart.fullname" $ }}-prometheus
+                {{- else if eq .service.name "fastapi-service" }}
+                name: {{ include "wiki-chart.fullname" $ }}-fastapi
+                {{- else }}
+                name: {{ .service.name }}
+                {{- end }}
+                port:
+                  # Port: Service port (not container port)
+                  # - Service exposes port (e.g., 3000)
+                  # - Service forwards to targetPort on pod
+                  # - Ingress connects to service port
+                  number: {{ .service.port }}
+          {{- end }}
+    {{- end }}
+
+# ============================================================================
+# Testing the Ingress
+# ============================================================================
+#
+# Prerequisites:
+# 1. Install nginx ingress controller:
+#    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/cloud/deploy.yaml
+#
+#    For Minikube:
+#    minikube addons enable ingress
+#
+# 2. Add DNS entry to /etc/hosts:
+#    # Get Minikube IP
+#    minikube ip
+#    # Output: 192.168.49.2
+#
+#    # Add to /etc/hosts (sudo required)
+#    sudo nano /etc/hosts
+#    # Add line: 192.168.49.2 wiki-api.local
+#
+# 3. Deploy the application:
+#    helm install wiki-chart ./wiki-chart
+#
+# 4. Wait for Ingress to get an address:
+#    kubectl get ingress
+#    # NAME                    CLASS   HOSTS            ADDRESS        PORTS   AGE
+#    # wiki-chart-ingress      nginx   wiki-api.local   192.168.49.2   80      5m
+#
+# Testing URLs:
+# 1. FastAPI: http://wiki-api.local/
+#    curl http://wiki-api.local/health
+#    curl http://wiki-api.local/docs
+#
+# 2. Grafana: http://wiki-api.local/grafana
+#    Open in browser: http://wiki-api.local/grafana
+#    Login: admin / admin
+#
+# 3. Prometheus: http://wiki-api.local/prometheus
+#    Open in browser: http://wiki-api.local/prometheus
+#    Check targets: http://wiki-api.local/prometheus/targets
+#
+# Troubleshooting:
+# 1. "Unable to connect" or timeout:
+#    - Check ingress controller is running:
+#      kubectl get pods -n ingress-nginx
+#    - Verify /etc/hosts entry is correct
+#    - Check Ingress has ADDRESS:
+#      kubectl get ingress
+#
+# 2. "404 Not Found":
+#    - Check service names match:
+#      kubectl get services
+#    - Verify pod is running:
+#      kubectl get pods
+#    - Check Ingress events:
+#      kubectl describe ingress wiki-chart-ingress
+#
+# 3. "502 Bad Gateway":
+#    - Backend service is down
+#    - Check pod logs:
+#      kubectl logs -l app.kubernetes.io/component=visualization
+#    - Verify service endpoints:
+#      kubectl get endpoints
+#
+# 4. Grafana/Prometheus shows "Page not found":
+#    - Path rewriting issue
+#    - Check annotations are correct
+#    - View nginx config:
+#      kubectl exec -n ingress-nginx <ingress-controller-pod> -- cat /etc/nginx/nginx.conf
+#
+# 5. SSL/TLS issues (if enabled):
+#    - Check certificate secret exists:
+#      kubectl get secret wiki-api-tls
+#    - Verify certificate is valid:
+#      kubectl describe secret wiki-api-tls
+#    - Check cert-manager logs (if using):
+#      kubectl logs -n cert-manager -l app=cert-manager
+#
+# ============================================================================
+# Production Considerations
+# ============================================================================
+#
+# 1. TLS/SSL Certificates:
+#    - Use Let's Encrypt with cert-manager
+#    - Automate certificate renewal
+#    - Enable HSTS headers
+#
+# 2. Authentication:
+#    - Protect Prometheus and Grafana with auth
+#    - Use OAuth2 proxy for SSO
+#    - Implement IP whitelisting
+#
+# 3. Rate Limiting:
+#    - Prevent abuse and DDoS
+#    - Set per-IP rate limits
+#    - Different limits for different paths
+#
+# 4. Monitoring:
+#    - Monitor ingress controller metrics
+#    - Set up alerts for 5xx errors
+#    - Track request latency
+#
+# 5. High Availability:
+#    - Run multiple ingress controller replicas
+#    - Use LoadBalancer service type (cloud)
+#    - Implement health checks
+#
+# 6. Security:
+#    - Enable ModSecurity WAF
+#    - Block suspicious requests
+#    - Regular security audits
+#
+# 7. DNS:
+#    - Use ExternalDNS for automation
+#    - Configure proper TTL values
+#    - Set up health checks
+# ============================================================================
+{{- end }}
