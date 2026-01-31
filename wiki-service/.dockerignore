@@ -1,0 +1,166 @@
+# ============================================================================
+# Docker Build Context Exclusions
+# ============================================================================
+# Files and directories listed here are excluded from the Docker build context
+# Benefits: Faster builds, smaller context, improved security
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# Python Runtime Files
+# -----------------------------------------------------------------------------
+# Compiled Python files (regenerated during container build)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Python egg files
+*.egg
+*.egg-info/
+dist/
+build/
+
+# -----------------------------------------------------------------------------
+# Development and Testing Files
+# -----------------------------------------------------------------------------
+# Virtual environments (container has its own environment)
+venv/
+env/
+ENV/
+.venv/
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# -----------------------------------------------------------------------------
+# Database Files
+# -----------------------------------------------------------------------------
+# SQLite databases (using PostgreSQL in production)
+*.db
+*.sqlite
+*.sqlite3
+
+# Database migrations (handled separately)
+alembic/versions/*.py
+
+# -----------------------------------------------------------------------------
+# Version Control
+# -----------------------------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+
+# -----------------------------------------------------------------------------
+# IDE and Editor Files
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# -----------------------------------------------------------------------------
+# Environment and Configuration Files
+# -----------------------------------------------------------------------------
+# Local environment files (secrets should never be in images)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Configuration overrides
+config.local.yml
+config.dev.yml
+
+# -----------------------------------------------------------------------------
+# Documentation Files
+# -----------------------------------------------------------------------------
+# Documentation is useful but not needed in the runtime image
+*.md
+README*
+LICENSE
+CHANGELOG*
+docs/
+
+# -----------------------------------------------------------------------------
+# Docker Files
+# -----------------------------------------------------------------------------
+# Docker-related files (not needed inside the image)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# -----------------------------------------------------------------------------
+# Kubernetes and Deployment Files
+# -----------------------------------------------------------------------------
+# Kubernetes manifests (deployed separately)
+*.yaml
+*.yml
+helm/
+k8s/
+
+# -----------------------------------------------------------------------------
+# CI/CD Files
+# -----------------------------------------------------------------------------
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# -----------------------------------------------------------------------------
+# Logs and Temporary Files
+# -----------------------------------------------------------------------------
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# -----------------------------------------------------------------------------
+# Project-Specific Exclusions
+# -----------------------------------------------------------------------------
+# Assignment artifacts
+nebula-aurora-assignment/
+.abacus.donotdelete
+
+# Test scripts
+test_*.sh
+
+# Local deployment guides
+LOCAL_DEPLOYMENT_GUIDE.md
+GITHUB_SETUP.md
+PHASE*.md
+
+# -----------------------------------------------------------------------------
+# Why .dockerignore Matters
+# -----------------------------------------------------------------------------
+# 1. Build Performance:
+#    - Smaller build context = faster uploads to Docker daemon
+#    - Typical reduction: 50-90% of context size
+#    - Example: 100MB project -> 10MB context
+#
+# 2. Security:
+#    - Prevents accidental inclusion of secrets (.env files)
+#    - Excludes .git history (may contain sensitive data)
+#    - Removes development tools that increase attack surface
+#
+# 3. Image Size:
+#    - Excludes documentation and unnecessary files
+#    - Typical reduction: 10-50MB per image
+#
+# 4. Cache Efficiency:
+#    - Prevents cache invalidation from non-code changes
+#    - Changes to README.md won't trigger full rebuilds
+#
+# ============================================================================
