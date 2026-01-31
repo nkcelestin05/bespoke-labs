@@ -41,7 +41,7 @@ async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
     return UserResponse(
         id=new_user.id,
         name=new_user.name,
-        created_time=new_user.created_time
+        created_time=new_user.created_time,
     )
 
 
@@ -79,7 +79,7 @@ async def create_post(post: PostCreate, db: AsyncSession = Depends(get_db)):
         post_id=new_post.id,
         content=new_post.content,
         user_id=new_post.user_id,
-        created_time=new_post.created_time
+        created_time=new_post.created_time,
     )
 
 
@@ -102,7 +102,7 @@ async def get_user(id: int, db: AsyncSession = Depends(get_db)):
     return UserResponse(
         id=user.id,
         name=user.name,
-        created_time=user.created_time
+        created_time=user.created_time,
     )
 
 
@@ -127,7 +127,7 @@ async def get_post(id: int, db: AsyncSession = Depends(get_db)):
         post_id=post.id,
         content=post.content,
         user_id=post.user_id,
-        created_time=post.created_time
+        created_time=post.created_time,
     )
 
 
@@ -141,8 +141,8 @@ async def root():
             "POST /posts": "Create a new post",
             "GET /user/{id}": "Get user by ID",
             "GET /posts/{id}": "Get post by ID",
-            "GET /metrics": "Prometheus metrics"
-        }
+            "GET /metrics": "Prometheus metrics",
+        },
     }
 
 

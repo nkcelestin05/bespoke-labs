@@ -36,6 +36,18 @@ data:
       # evaluation_interval: How often to evaluate recording/alerting rules
       # We don't have rules yet, but this prepares for Phase 10+
       evaluation_interval: {{ .Values.prometheus.evaluationInterval }}
+      
+    # Rule files: Where Prometheus loads alerting rules (Phase 10)
+    rule_files:
+      - 'alert_rules.yml'
+    
+{{- if .Values.alertmanager.enabled }}
+    # Alerting configuration: Send firing alerts to Alertmanager
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['{{ include "wiki-chart.fullname" . }}-alertmanager:{{ .Values.alertmanager.service.port | default 9093 }}']
+    {{- end }}
     
     # Scrape configurations: Define what endpoints to monitor
     scrape_configs:
@@ -78,3 +90,37 @@ data:
         # - prometheus_tsdb_*: Time-series database metrics
         # - prometheus_http_requests_total: API request counts
         # - go_*: Go runtime metrics (memory, goroutines, etc.)
+  
+  # Alerting rules file: Prometheus loads these from the mounted config
+  alert_rules.yml: |
+    groups:
+    - name: fastapi-alerts
+      rules:
+      - alert: FastAPIDown
+        expr: up{job="fastapi"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FastAPI target is down (job={{`{{ $labels.job }}`}})"
+          description: "FastAPI job is down for more than 2 minutes"
+
+    - name: prometheus-alerts
+      rules:
+      - alert: PrometheusDown
+        expr: up{job="prometheus"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus itself is down"
+          description: "Prometheus target is down"
+
+      - alert: PrometheusHighMemory
+        expr: process_resident_memory_bytes{job="prometheus"} > 200000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus high memory usage"
+          description: "Prometheus memory > 200MB for >5m"

@@ -146,6 +146,32 @@ prometheus:
     accessMode: ReadWriteOnce
 
 # ============================================================================
+# Alertmanager Configuration
+# Phase 10: Basic alerting stack and defaults
+alertmanager:
+  enabled: true
+  image:
+    repository: prom/alertmanager
+    tag: "v0.25.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 9093
+    name: alertmanager
+  # Integrations: Provide a Slack webhook URL to enable Slack notifications
+  # You should override this via --set or via a Secret in production
+  config:
+    slack_api_url: ""        # e.g. https://hooks.slack.com/services/T0000/B0000/XXXX
+    slack_channel: "#alerts" # Channel to post alerts to
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# ============================================================================
 # Grafana Visualization Configuration
 # ============================================================================
 grafana:
