@@ -1,0 +1,139 @@
+# PostgreSQL Deployment
+# ======================
+# A Deployment manages a set of identical pods, ensuring the desired number are always running.
+# For PostgreSQL, we typically run 1 replica with persistent storage.
+#
+# Key Components:
+# - Container specification with PostgreSQL image
+# - Environment variables for database configuration
+# - Volume mounts for persistent data storage
+# - Health probes to ensure the database is responsive
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Name of the deployment
+  name: {{ include "wiki-chart.fullname" . }}-postgresql
+  
+  # Labels for organization and selection
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: wiki-service
+
+spec:
+  # For databases, we typically use 1 replica with persistent storage
+  # Multiple replicas would require more complex replication setup
+  replicas: 1
+  
+  # Selector defines which pods this deployment manages
+  selector:
+    matchLabels:
+      {{- include "wiki-chart.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: database
+  
+  # Template defines the pod specification
+  template:
+    metadata:
+      labels:
+        {{- include "wiki-chart.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: database
+    
+    spec:
+      containers:
+      - name: postgresql
+        # PostgreSQL image from values.yaml - allows easy version upgrades
+        image: {{ .Values.postgresql.image }}
+        imagePullPolicy: IfNotPresent
+        
+        # Container port - PostgreSQL's default port
+        ports:
+        - containerPort: 5432
+          name: postgresql
+          protocol: TCP
+        
+        # Environment Variables
+        # =====================
+        # These configure the PostgreSQL database on first startup
+        env:
+        # Database name to create
+        - name: POSTGRES_DB
+          value: {{ .Values.postgresql.database }}
+        
+        # Database user to create
+        - name: POSTGRES_USER
+          value: {{ .Values.postgresql.username }}
+        
+        # Database password - in production, use a Secret instead!
+        - name: POSTGRES_PASSWORD
+          value: {{ .Values.postgresql.password }}
+        
+        # PGDATA specifies where PostgreSQL stores its data files
+        # We use a subdirectory to avoid issues with lost+found directory
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        
+        # Volume Mounts
+        # =============
+        # This connects the PVC to a directory inside the container
+        volumeMounts:
+        - name: postgresql-storage
+          # Mount point inside the container
+          mountPath: /var/lib/postgresql/data
+          # This is where PostgreSQL expects to find/store data
+        
+        # Liveness Probe
+        # ==============
+        # Checks if the container is still running properly
+        # If this fails multiple times, Kubernetes will restart the container
+        livenessProbe:
+          exec:
+            # pg_isready is a PostgreSQL utility that checks if the server is ready
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U {{ .Values.postgresql.username }}
+          # Wait 30 seconds before first check (database needs time to start)
+          initialDelaySeconds: 30
+          # Check every 10 seconds
+          periodSeconds: 10
+          # Fail after 3 consecutive failures
+          failureThreshold: 3
+        
+        # Readiness Probe
+        # ===============
+        # Checks if the container is ready to accept traffic
+        # If this fails, the pod won't receive traffic from the service
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U {{ .Values.postgresql.username }}
+          # Check sooner than liveness (database might be ready before fully started)
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3
+        
+        # Resource Limits
+        # ===============
+        # These ensure the pod doesn't consume too many cluster resources
+        resources:
+          # Requests: guaranteed resources allocated to the pod
+          requests:
+            memory: {{ .Values.postgresql.resources.requests.memory }}
+            cpu: {{ .Values.postgresql.resources.requests.cpu }}
+          # Limits: maximum resources the pod can use
+          limits:
+            memory: {{ .Values.postgresql.resources.limits.memory }}
+            cpu: {{ .Values.postgresql.resources.limits.cpu }}
+      
+      # Volumes
+      # =======
+      # This section defines the volumes available to containers in this pod
+      volumes:
+      - name: postgresql-storage
+        # References the PVC we created in postgresql-pvc.yaml
+        persistentVolumeClaim:
+          claimName: {{ include "wiki-chart.fullname" . }}-postgresql-pvc
+        # This links the PVC's storage to the volume mount in the container

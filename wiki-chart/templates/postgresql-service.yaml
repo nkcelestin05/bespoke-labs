@@ -1,0 +1,64 @@
+# PostgreSQL Service
+# ==================
+# A Service provides a stable network endpoint for accessing pods.
+# Even if pods are recreated with new IP addresses, the Service IP stays the same.
+#
+# Why do we need this?
+# - Pods are ephemeral and can be recreated with different IP addresses
+# - The Service provides a DNS name that other pods can use to connect
+# - For PostgreSQL, our FastAPI app will use this service name to connect
+#
+# Example: The FastAPI app can connect using:
+#   DB_HOST=wiki-chart-postgresql (the service name)
+#   DB_PORT=5432 (the service port)
+
+apiVersion: v1
+kind: Service
+metadata:
+  # Name of the service - this becomes the DNS name within the cluster
+  name: {{ include "wiki-chart.fullname" . }}-postgresql
+  
+  # Labels for organization
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: wiki-service
+
+spec:
+  # Service Type: ClusterIP
+  # =======================
+  # ClusterIP means this service is only accessible within the cluster
+  # - NOT exposed to the internet (perfect for databases!)
+  # - Only other pods in the cluster can connect
+  # - More secure than NodePort or LoadBalancer for internal services
+  type: ClusterIP
+  
+  # Ports Configuration
+  # ===================
+  ports:
+  - port: {{ .Values.postgresql.service.port }}
+    # The port that the Service listens on (from values.yaml)
+    # Other pods will connect to this port
+    
+    targetPort: 5432
+    # The port on the PostgreSQL container (PostgreSQL's default port)
+    # Traffic sent to 'port' is forwarded to 'targetPort' on the pod
+    
+    protocol: TCP
+    name: postgresql
+  
+  # Selector
+  # ========
+  # This defines which pods receive traffic from this service
+  # Must match the labels on the PostgreSQL deployment pods
+  selector:
+    {{- include "wiki-chart.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+  
+  # How it works:
+  # =============
+  # 1. FastAPI pod queries DNS for "wiki-chart-postgresql"
+  # 2. DNS returns the ClusterIP of this service
+  # 3. FastAPI connects to ClusterIP:5432
+  # 4. Service forwards traffic to pod with matching selector labels
+  # 5. Traffic arrives at PostgreSQL container on port 5432

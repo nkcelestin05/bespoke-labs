@@ -1,0 +1,40 @@
+# PersistentVolumeClaim (PVC) for PostgreSQL
+# ==========================================
+# A PVC is a request for storage by a user. It's like a "storage ticket" that your
+# pod can use to claim a piece of storage from the cluster.
+#
+# Why do we need this for databases?
+# - Databases need PERSISTENT storage that survives pod restarts
+# - Without a PVC, data would be lost when the pod is deleted or crashes
+# - The PVC ensures data is stored on a physical volume that persists independently
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  # Name of the PVC - referenced by the Deployment to mount the volume
+  name: {{ include "wiki-chart.fullname" . }}-postgresql-pvc
+  
+  # Labels help identify and organize this resource
+  labels:
+    {{- include "wiki-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: wiki-service
+
+spec:
+  # AccessModes define how the volume can be mounted
+  # ReadWriteOnce (RWO): Volume can be mounted as read-write by a single node
+  # This is perfect for databases which typically run on one pod at a time
+  accessModes:
+    - ReadWriteOnce
+  
+  # Resources define the storage requirements
+  resources:
+    requests:
+      # The amount of storage requested - templated from values.yaml
+      # This allows easy configuration without editing this file
+      storage: {{ .Values.postgresql.persistence.size }}
+  
+  # storageClassName can be specified here to use a specific storage class
+  # If omitted, the cluster's default storage class is used
+  # Different storage classes offer different performance/cost characteristics
+  # storageClassName: standard
