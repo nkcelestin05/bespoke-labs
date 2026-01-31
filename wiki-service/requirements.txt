@@ -1,0 +1,17 @@
+# FastAPI Framework
+fastapi>=0.121.0
+uvicorn>=0.38.0
+
+# Database - PostgreSQL
+asyncpg>=0.30.0
+sqlalchemy>=2.0.44
+greenlet>=3.2.4
+
+# Data Validation
+pydantic>=2.12.3
+
+# Monitoring
+prometheus-client>=0.23.1
+
+# Note: aiosqlite has been removed as we're migrating to PostgreSQL
+# asyncpg is the async PostgreSQL driver that replaces aiosqlite
