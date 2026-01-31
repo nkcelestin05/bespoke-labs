@@ -1,0 +1,252 @@
+# Default values for wiki-chart
+# This file contains configuration values for all components of the Wikipedia-like API service
+# Values can be overridden via command line: helm install --set key=value
+
+# ============================================================================
+# FastAPI Service Configuration
+# ============================================================================
+fastapi:
+  # Docker image configuration
+  image:
+    repository: wiki-service  # Will be built from Dockerfile
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  # Deployment configuration
+  replicaCount: 2  # Run 2 pods for high availability
+  
+  # Service configuration
+  service:
+    type: ClusterIP  # Internal service (exposed via Ingress)
+    port: 8000
+    targetPort: 8000
+    name: http
+  
+  # Resource limits and requests
+  resources:
+    requests:
+      cpu: "100m"      # Minimum CPU: 0.1 cores
+      memory: "128Mi"  # Minimum RAM: 128 MB
+    limits:
+      cpu: "500m"      # Maximum CPU: 0.5 cores
+      memory: "512Mi"  # Maximum RAM: 512 MB
+  
+  # Health check configuration
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  # Environment variables for database connection
+  env:
+    DB_HOST: "postgres-service"  # PostgreSQL service name
+    DB_PORT: "5432"
+    DB_NAME: "wikidb"
+    DB_USER: "postgres"
+    # DB_PASSWORD will be mounted from Secret
+
+# ============================================================================
+# PostgreSQL Database Configuration
+# ============================================================================
+postgresql:
+  # Docker image configuration
+  image:
+    repository: postgres
+    tag: "16-alpine"  # Lightweight Alpine-based PostgreSQL 16
+    pullPolicy: IfNotPresent
+  
+  # Database configuration
+  database:
+    name: wikidb
+    user: postgres
+    password: postgres  # CHANGE IN PRODUCTION! Use Secrets
+  
+  # Persistence configuration
+  persistence:
+    enabled: true
+    storageClass: "standard"  # Use default storage class
+    size: 1Gi  # 1 GB storage for database
+    accessMode: ReadWriteOnce
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 5432
+    targetPort: 5432
+    name: postgres
+  
+  # Resource limits
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+# ============================================================================
+# Prometheus Monitoring Configuration
+# ============================================================================
+prometheus:
+  # Docker image configuration
+  image:
+    repository: prom/prometheus
+    tag: "v2.48.0"  # Stable Prometheus version
+    pullPolicy: IfNotPresent
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 9090
+    targetPort: 9090
+    name: prometheus
+  
+  # Scrape configuration
+  scrapeInterval: 15s  # Scrape metrics every 15 seconds
+  evaluationInterval: 15s  # Evaluate rules every 15 seconds
+  
+  # Scrape targets
+  scrapeConfigs:
+    - job_name: 'fastapi'
+      static_configs:
+        - targets: ['fastapi-service:8000']  # Scrape FastAPI /metrics endpoint
+      metrics_path: '/metrics'
+    
+    - job_name: 'prometheus'
+      static_configs:
+        - targets: ['localhost:9090']  # Self-monitoring
+  
+  # Resource limits
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  
+  # Persistence for metrics data
+  persistence:
+    enabled: true
+    storageClass: "standard"
+    size: 2Gi  # 2 GB for metrics storage
+    accessMode: ReadWriteOnce
+
+# ============================================================================
+# Grafana Visualization Configuration
+# ============================================================================
+grafana:
+  # Docker image configuration
+  image:
+    repository: grafana/grafana
+    tag: "10.2.3"  # Stable Grafana version
+    pullPolicy: IfNotPresent
+  
+  # Admin credentials
+  adminUser: admin
+  adminPassword: admin  # CHANGE IN PRODUCTION! Use Secrets
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+    name: grafana
+  
+  # Datasource configuration (auto-configure Prometheus)
+  datasources:
+    - name: Prometheus
+      type: prometheus
+      url: http://prometheus-service:9090
+      access: proxy
+      isDefault: true
+  
+  # Dashboard provisioning
+  dashboards:
+    enabled: true
+    path: /etc/grafana/provisioning/dashboards
+    configMapName: grafana-dashboards
+  
+  # Resource limits
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  
+  # Persistence for dashboards and data
+  persistence:
+    enabled: true
+    storageClass: "standard"
+    size: 1Gi
+    accessMode: ReadWriteOnce
+
+# ============================================================================
+# Ingress Configuration (API Gateway)
+# ============================================================================
+ingress:
+  enabled: true
+  className: nginx  # Use nginx ingress controller
+  
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # Add SSL redirect in production:
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  
+  # Host configuration
+  hosts:
+    - host: wiki-api.local  # Local development domain
+      paths:
+        - path: /
+          pathType: Prefix
+          service:
+            name: fastapi-service
+            port: 8000
+        
+        - path: /grafana
+          pathType: Prefix
+          service:
+            name: grafana-service
+            port: 3000
+        
+        - path: /prometheus
+          pathType: Prefix
+          service:
+            name: prometheus-service
+            port: 9090
+  
+  # TLS configuration (for HTTPS)
+  tls: []
+  # Uncomment for production:
+  # tls:
+  #   - secretName: wiki-api-tls
+  #     hosts:
+  #       - wiki-api.example.com
+
+# ============================================================================
+# Global Configuration
+# ============================================================================
+global:
+  # Namespace (can be overridden)
+  namespace: default
+  
+  # Common labels applied to all resources
+  labels:
+    app: wiki-service
+    version: v1
+    managed-by: helm
