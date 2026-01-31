@@ -10,7 +10,9 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "wikidb")
 
-DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URL = (
+    f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
 
 # Create async engine
 engine = create_async_engine(
@@ -19,19 +21,19 @@ engine = create_async_engine(
     future=True,
     pool_pre_ping=True,  # Verify connections before using them
     pool_size=10,  # Connection pool size for better performance
-    max_overflow=20  # Allow up to 20 additional connections beyond pool_size
+    max_overflow=20,  # Allow up to 20 additional connections beyond pool_size
 )
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False
+    engine, class_=AsyncSession, expire_on_commit=False
 )
+
 
 # Base class for models
 class Base(DeclarativeBase):
     pass
+
 
 # Dependency to get database session
 async def get_db():
